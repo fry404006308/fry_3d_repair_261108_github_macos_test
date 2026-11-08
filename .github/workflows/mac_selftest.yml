@@ -29,10 +29,14 @@ jobs:
         include:
           - runner: macos-15          # Apple 芯片（arm64）；macOS 15 = 便携包承诺的最低系统
             target: macos-arm64
+            mode: full                # 自检 + 原生库对拍 + 4 模型（约 25 分钟）
+            timeout: 60
           - runner: macos-15-intel    # Intel（x64）
             target: macos-x64
+            mode: smoke               # ★172：只跑渲染压力测试 + 原生库对拍 —— Intel 虚拟机上 python 仿真一次约 16 分钟，
+            timeout: 30               #   完整自检要 60 分钟以上（v2.13.0 实测被 60 分钟上限取消）；完整 x64 测试请用真 Mac（Rosetta 也行）
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -43,7 +47,7 @@ jobs:
           gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "mac_ci_kit.zip" --dir dl
           ls -la dl
       - name: 自检 + 原生库对拍 + 4 模型检测修复对拍
-        run: bash run_mac_ci.sh dl "${{ matrix.target }}" out
+        run: bash run_mac_ci.sh dl "${{ matrix.target }}" out "${{ matrix.mode }}"
       - name: 结论写进 Summary
         if: always()
         run: cat out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
