@@ -7,7 +7,7 @@
 set -u
 # ★172：变量后面紧跟中文时必须写成 ${VAR} —— 170 版 `$BV：` 在 GitHub 的 macOS 机器上报 "BV�: unbound variable"（bash 把全角冒号的字节当成了变量名）
 export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-DL="$1"; TARGET="$2"; OUT="$(mkdir -p "$3" && cd "$3" && pwd)"
+DL="$1"; TARGET="$2"; OUT="$(mkdir -p "$3" && cd "$3" && pwd)"; MODE="${4:-full}"     # ★172 full / smoke（smoke = 压力测试 + 原生库对拍，不跑自检与 4 模型）
 W="$(mktemp -d)"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
 log "机器：$(uname -m) / macOS $(sw_vers -productVersion 2>/dev/null) / $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
@@ -26,17 +26,23 @@ find "$RES/app" -name '*.cpython-312-darwin.so' | wc -l | tr -d ' ' > "$OUT/n_ex
 log ".py $(wc -l < "$OUT/py_in_package.txt" | tr -d ' ') 个，本项目扩展 $(cat "$OUT/n_ext.txt") 个"
 # Blender（可选）：kit 里写了版本；装官方 DMG + 3D Print Toolbox 扩展，HA400 十项与交付才和 Windows 参考机可比
 BV="$(cat "$W/kit/blender_version.txt" 2>/dev/null)"
-if [ -n "$BV" ]; then
-  ARCH=arm64; [ "$TARGET" = "macos-x64" ] && ARCH=x64
-  URL="https://download.blender.org/release/Blender${BV%.*}/blender-${BV}-macos-${ARCH}.dmg"
-  log "装 Blender ${BV}：$URL"
+if [ -n "$BV" ] && [ "$TARGET" = "macos-x64" ]; then
+  log "跳过 Blender：Blender 5.0 起不再出 Intel Mac 版（${BV} 没有 macos-x64 安装包）——Intel Mac 上 HA400 十项回退到项目统计（097），交付清单会缺 Blender 项"
+elif [ -n "$BV" ]; then
+  URL="https://download.blender.org/release/Blender${BV%.*}/blender-${BV}-macos-arm64.dmg"
+  log "装 Blender ${BV}：${URL}"
+  # ★172：先建 ~/Applications —— 目录不存在时 `cp -R Blender.app ~/Applications/` 会把 Blender.app 本身复制成 ~/Applications（返回 0），
+  #        170 版的「失败再 mkdir」兜底永远不触发，FRY_BLENDER_EXE 指向一个不存在的文件（CI 实测：Blender 版本行为空、自检「没找到 Blender」）
+  mkdir -p "$HOME/Applications"
   if curl -fsSL -o "$W/blender.dmg" "$URL" && hdiutil attach -nobrowse -quiet -mountpoint "$W/bmnt" "$W/blender.dmg"; then
-    cp -R "$W/bmnt/Blender.app" "$HOME/Applications/" 2>/dev/null || { mkdir -p "$HOME/Applications"; cp -R "$W/bmnt/Blender.app" "$HOME/Applications/"; }
+    rm -rf "$HOME/Applications/Blender.app"; cp -R "$W/bmnt/Blender.app" "$HOME/Applications/Blender.app"
     hdiutil detach -quiet "$W/bmnt"
+    xattr -dr com.apple.quarantine "$HOME/Applications/Blender.app" 2>/dev/null
     EXT="$HOME/Library/Application Support/Blender/${BV%.*}/extensions/blender_org"
     mkdir -p "$EXT" && [ -d "$W/kit/print3d_toolbox" ] && cp -R "$W/kit/print3d_toolbox" "$EXT/"
     export FRY_BLENDER_EXE="$HOME/Applications/Blender.app/Contents/MacOS/Blender"
-    log "Blender：$("$FRY_BLENDER_EXE" --version 2>/dev/null | head -1)"
+    "$FRY_BLENDER_EXE" --version > "$OUT/blender_version.log" 2>&1
+    log "Blender：$(head -1 "$OUT/blender_version.log")（$(ls -la "$FRY_BLENDER_EXE" 2>&1 | head -1)）"
   else
     log "Blender 没装上（结果里 HA400 / 交付会和 Windows 不同，单独看）"
   fi
@@ -50,18 +56,26 @@ else
 fi
 log "渲染压力测试退出码 ${RC0}：$(tail -1 "$OUT/render_stress.log")"
 # ② 自检 ③ 原生库对拍
-"$APP" --selftest "$OUT/selftest" > "$OUT/selftest.log" 2>&1; RC1=$?
-log "自检退出码 ${RC1}（= 失败项数）"
+if [ "$MODE" = "full" ]; then
+  "$APP" --selftest "$OUT/selftest" > "$OUT/selftest.log" 2>&1; RC1=$?
+  log "自检退出码 ${RC1}（= 失败项数）"
+else
+  RC1=0; echo "smoke 模式：不跑自检（Intel 虚拟机上没有仿真 dll，python 仿真一次约 16 分钟，自检要 3 次）" > "$OUT/selftest.log"
+fi
 "$APP" "$RES/app/fry_package/portable/verify_native.py" "$OUT/verify_native" > "$OUT/verify_native.log" 2>&1; RC2=$?
 log "原生库对拍退出码 $RC2"
 # ④ 4 模型检测 + 修复 → 和 Windows 源码比
+if [ "$MODE" = "full" ]; then
 "$RES/python/bin/python3" -X utf8 "$W/kit/xplat_compare.py" run "$APP" --input "$W/kit/models" --out "$OUT/xp" \
     --label "$TARGET" > "$OUT/xplat_run.log" 2>&1; RC3=$?
 "$RES/python/bin/python3" -X utf8 "$W/kit/xplat_compare.py" compare "$W/kit/xplat_windows_source.json" "$OUT/xp/xplat_$TARGET.json" \
     --json "$OUT/compare.json" > "$OUT/compare.log" 2>&1; RC4=$?
 log "4 模型：运行 ${RC3}，比较 ${RC4}（0 = 与 Windows 源码 0 处不同）"
+else
+  RC3=0; RC4=0; echo "smoke 模式：不跑 4 模型" > "$OUT/compare.log"
+fi
 {
-  echo "## ${TARGET}（$(uname -m)，macOS $(sw_vers -productVersion 2>/dev/null)）"
+  echo "## ${TARGET}（$(uname -m)，macOS $(sw_vers -productVersion 2>/dev/null)，模式 ${MODE}）"
   echo ""
   echo "| 项 | 结果 |"
   echo "| --- | --- |"
