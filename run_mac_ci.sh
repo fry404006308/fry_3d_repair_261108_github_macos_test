@@ -5,6 +5,8 @@
 # 用法：bash run_mac_ci.sh <下载目录（含 *_macos-xxx.zip 与 mac_ci_kit.zip）> <macos-arm64|macos-x64> <结果目录>
 # 在自己的 Mac 上也能直接跑（不需要 GitHub）：把两个 zip 放进同一个文件夹，bash run_mac_ci.sh 那个文件夹 macos-arm64 结果
 set -u
+# ★172：变量后面紧跟中文时必须写成 ${VAR} —— 170 版 `$BV：` 在 GitHub 的 macOS 机器上报 "BV�: unbound variable"（bash 把全角冒号的字节当成了变量名）
+export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 DL="$1"; TARGET="$2"; OUT="$(mkdir -p "$3" && cd "$3" && pwd)"
 W="$(mktemp -d)"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/run.log"; }
@@ -27,7 +29,7 @@ BV="$(cat "$W/kit/blender_version.txt" 2>/dev/null)"
 if [ -n "$BV" ]; then
   ARCH=arm64; [ "$TARGET" = "macos-x64" ] && ARCH=x64
   URL="https://download.blender.org/release/Blender${BV%.*}/blender-${BV}-macos-${ARCH}.dmg"
-  log "装 Blender $BV：$URL"
+  log "装 Blender ${BV}：$URL"
   if curl -fsSL -o "$W/blender.dmg" "$URL" && hdiutil attach -nobrowse -quiet -mountpoint "$W/bmnt" "$W/blender.dmg"; then
     cp -R "$W/bmnt/Blender.app" "$HOME/Applications/" 2>/dev/null || { mkdir -p "$HOME/Applications"; cp -R "$W/bmnt/Blender.app" "$HOME/Applications/"; }
     hdiutil detach -quiet "$W/bmnt"
@@ -46,10 +48,10 @@ if [ -f "$HERE_DIR/render_stress.py" ]; then
 else
   RC0=0; echo "没有 render_stress.py，跳过" > "$OUT/render_stress.log"
 fi
-log "渲染压力测试退出码 $RC0：$(tail -1 "$OUT/render_stress.log")"
+log "渲染压力测试退出码 ${RC0}：$(tail -1 "$OUT/render_stress.log")"
 # ② 自检 ③ 原生库对拍
 "$APP" --selftest "$OUT/selftest" > "$OUT/selftest.log" 2>&1; RC1=$?
-log "自检退出码 $RC1（= 失败项数）"
+log "自检退出码 ${RC1}（= 失败项数）"
 "$APP" "$RES/app/fry_package/portable/verify_native.py" "$OUT/verify_native" > "$OUT/verify_native.log" 2>&1; RC2=$?
 log "原生库对拍退出码 $RC2"
 # ④ 4 模型检测 + 修复 → 和 Windows 源码比
@@ -57,16 +59,16 @@ log "原生库对拍退出码 $RC2"
     --label "$TARGET" > "$OUT/xplat_run.log" 2>&1; RC3=$?
 "$RES/python/bin/python3" -X utf8 "$W/kit/xplat_compare.py" compare "$W/kit/xplat_windows_source.json" "$OUT/xp/xplat_$TARGET.json" \
     --json "$OUT/compare.json" > "$OUT/compare.log" 2>&1; RC4=$?
-log "4 模型：运行 $RC3，比较 $RC4（0 = 与 Windows 源码 0 处不同）"
+log "4 模型：运行 ${RC3}，比较 ${RC4}（0 = 与 Windows 源码 0 处不同）"
 {
-  echo "## $TARGET（$(uname -m)，macOS $(sw_vers -productVersion 2>/dev/null)）"
+  echo "## ${TARGET}（$(uname -m)，macOS $(sw_vers -productVersion 2>/dev/null)）"
   echo ""
   echo "| 项 | 结果 |"
   echo "| --- | --- |"
   echo "| 包里的 .py / 本项目扩展 | $(wc -l < "$OUT/py_in_package.txt" | tr -d ' ') / $(cat "$OUT/n_ext.txt") |"
   echo "| 渲染压力测试（80 次建删渲染器） | $(tail -1 "$OUT/render_stress.log") |"
   echo "| 自检失败项 | $RC1 |"
-  echo "| 原生库对拍 | $RC2（0 = 逐字节同） |"
+  echo "| 原生库对拍 | ${RC2}（0 = 逐字节同） |"
   echo "| 4 模型 vs Windows 源码 | $(tail -1 "$OUT/compare.log") |"
   echo ""
   echo '```'; tail -20 "$OUT/selftest.log"; echo '```'
