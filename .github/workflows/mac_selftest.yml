@@ -1,0 +1,55 @@
+# ★170 macOS 真机自检（GitHub Actions 的 macOS 机器）：只上传「已编译的便携包 + 测试套件」，**源码不出公司**
+#
+# 为什么这样设计
+#   · 便携包里的本项目代码已是 Cython + zig 交叉编出的原生扩展（170），包本身不含源码 —— 所以 CI 只需要「包」，不需要仓库代码；
+#   · 这个仓库里只放本文件（.github/workflows/mac_selftest.yml）与 run_mac_ci.sh，包和测试套件作为 Release 附件上传
+#     （Release 附件单个 ≤ 2 GB，不占 Actions 的 artifact 存储额度 —— 免费账号 artifact 只有 500 MB，而 mac 包约 550 MB）；
+#   · 私有仓库：macOS 机器按分钟计费（GitHub 官方价目 $0.062/分钟；免费账号每月含 $12 额度 ≈ 190 分钟），
+#     一次两个架构约 2 × 15 分钟 —— 每月能跑 5~6 次；公开仓库不计费，但公司的包不应公开。
+#
+# 用法（一次性准备见 170_14；之后每次发布）
+#   1. python fry_package/ci/mac_ci.py upload --repo <你的账号>/glb-mac-ci --tag v2.11.0 --files <arm64.zip> <x64.zip> <mac_ci_kit.zip>
+#      （或网页上 Releases → Draft a new release → 拖进三个文件）
+#   2. python fry_package/ci/mac_ci.py run --repo <你的账号>/glb-mac-ci --tag v2.11.0 --out <结果目录>
+#      （或仓库页面 Actions → mac-selftest → Run workflow → 填 tag）；约 15~25 分钟后在 Summary 里看结论，结果包在 Artifacts
+name: mac-selftest
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release 的 tag（附件里有 *_macos-arm64.zip / *_macos-x64.zip / mac_ci_kit.zip）'
+        required: true
+permissions:
+  contents: read
+jobs:
+  selftest:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15          # Apple 芯片（arm64）；macOS 15 = 便携包承诺的最低系统
+            target: macos-arm64
+          - runner: macos-15-intel    # Intel（x64）
+            target: macos-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4      # 只取到本文件与 run_mac_ci.sh（仓库里没有项目源码）
+      - name: 下载包与测试套件
+        run: |
+          gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "*_${{ matrix.target }}.zip" --dir dl
+          gh release download "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" --pattern "mac_ci_kit.zip" --dir dl
+          ls -la dl
+      - name: 自检 + 原生库对拍 + 4 模型检测修复对拍
+        run: bash run_mac_ci.sh dl "${{ matrix.target }}" out
+      - name: 结论写进 Summary
+        if: always()
+        run: cat out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac_ci_${{ matrix.target }}
+          path: out/
+          retention-days: 7
